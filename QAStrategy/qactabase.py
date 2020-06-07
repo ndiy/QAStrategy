@@ -22,11 +22,19 @@ from QIFIAccount import ORDER_DIRECTION, QIFI_Account
 from QUANTAXIS.QAARP import QA_Risk, QA_User
 from QUANTAXIS.QAEngine.QAThreadEngine import QA_Thread
 from QUANTAXIS.QAUtil.QAParameter import MARKET_TYPE, RUNNING_ENVIRONMENT
+from QUANTAXIS.QAUtil.QALogs import QA_util_log_warning, QA_util_log_info, QA_util_log_debug, QA_util_log_error
+try:
+    __IPYTHON__
+except NameError:
+    from tqdm import tqdm
+else:
+    from tqdm.notebook import tqdm
+tqdm.pandas(desc='on bar')
 
 
 class QAStrategyCTABase():
     def __init__(self, code='rb2005', frequence='1min', strategy_id='QA_STRATEGY', risk_check_gap=1, portfolio='default',
-                 start='2020-01-01', end='2020-05-21', init_cash=1000000, send_wx=False,
+                 start='2020-01-01', end='2020-05-21', init_cash=1000000, send_wx=False, commission_coeff=0.00025, market_type='stock_cn',
                  data_host=eventmq_ip, data_port=eventmq_port, data_user=eventmq_username, data_password=eventmq_password,
                  trade_host=eventmq_ip, trade_port=eventmq_port, trade_user=eventmq_username, trade_password=eventmq_password,
                  taskid=None, mongo_ip=mongo_ip, model='py'):
@@ -65,6 +73,7 @@ class QAStrategyCTABase():
         self.end = end
         self.init_cash = init_cash
         self.taskid = taskid
+        self.commission_coeff = commission_coeff
 
         self.running_time = ''
 
@@ -88,10 +97,10 @@ class QAStrategyCTABase():
         self.dt = ''
         if isinstance(self.code, str):
             self.market_type = MARKET_TYPE.FUTURE_CN if re.search(
-                r'[a-zA-z]+', self.code) else MARKET_TYPE.STOCK_CN
+                r'[a-zA-z]+', self.code) else market_type
         else:
             self.market_type = MARKET_TYPE.FUTURE_CN if re.search(
-                r'[a-zA-z]+', self.code[0]) else MARKET_TYPE.STOCK_CN
+                r'[a-zA-z]+', self.code[0]) else market_type
 
         self.bar_order = {'BUY_OPEN': 0, 'SELL_OPEN': 0,
                           'BUY_CLOSE': 0, 'SELL_CLOSE': 0}
@@ -170,7 +179,7 @@ class QAStrategyCTABase():
         else:
             self.subscribe_multi(self.code, self.frequence, self.data_host,
                                  self.data_port, self.data_user, self.data_password, self.model)
-        print('account {} start sim'.format(self.strategy_id))
+        QA_util_log_info('account {} start sim'.format(self.strategy_id))
         self.database.strategy_schedule.job_control.update(
             {'strategy_id': self.strategy_id},
             {'strategy_id': self.strategy_id, 'taskid': self.taskid,
@@ -214,15 +223,15 @@ class QAStrategyCTABase():
         user = QA_User(username=self.username, password=self.password)
         port = user.new_portfolio(self.portfolio)
         self.acc = port.new_accountpro(
-            account_cookie=self.strategy_id, init_cash=self.init_cash, market_type=self.market_type, frequence=self.frequence)
+            account_cookie=self.strategy_id, init_cash=self.init_cash, commission_coeff=self.commission_coeff, market_type=self.market_type, frequence=self.frequence)
         self.positions = self.acc.get_position(self.code)
 
-        print(self.acc)
-        print(self.acc.market_type)
+        QA_util_log_info(self.acc)
+        QA_util_log_info(self.acc.market_type)
         data = QA.QA_quotation(self.code.upper(), self.start, self.end, source=QA.DATASOURCE.MONGO,
                                frequence=self.frequence, market=self.market_type, output=QA.OUTPUT_FORMAT.DATASTRUCT)
 
-        data.data.apply(self.x1, axis=1)
+        data.data.progress_apply(self.x1, axis=1)
 
     def x1(self, item):
         self.latest_price[item.name[1]] = item['close']
@@ -230,7 +239,7 @@ class QAStrategyCTABase():
             self.on_dailyclose()
             self.on_dailyopen()
             if self.market_type == QA.MARKET_TYPE.STOCK_CN:
-                print('backtest: Settle!')
+                QA_util_log_debug('backtest: Settle!')
                 self.acc.settle()
         self._on_1min_bar()
         self._market_data.append(item)
@@ -259,7 +268,7 @@ class QAStrategyCTABase():
                                 order.amount, order.datetime)
                 self.on_dailyopen()
                 if self.market_type == QA.MARKET_TYPE.STOCK_CN:
-                    print('backtest: Settle!')
+                    QA_util_log_debug('backtest: Settle!')
                     self.acc.settle()
             self._on_1min_bar()
             self._market_data.append(item)
@@ -406,7 +415,7 @@ class QAStrategyCTABase():
         if self.running_mode == 'sim':
             return self._market_data
         elif self.running_mode == 'backtest':
-            return pd.concat(self._market_data[-100:], axis=1, sort=False).T
+            return pd.concat(self._market_data, axis=1, sort=False).T
 
     def force_close(self):
         # 强平
@@ -633,8 +642,8 @@ class QAStrategyCTABase():
 
         order is a dict type
         """
-        print('------this is on deal message ------')
-        print(order)
+        QA_util_log_debug('------this is on deal message ------')
+        QA_util_log_debug(order)
 
     def on_1min_bar(self):
         raise NotImplementedError
@@ -696,7 +705,7 @@ class QAStrategyCTABase():
             return True
 
     def on_ordererror(self, direction, offset, price, volume):
-        print('order Error ')
+        QA_util_log_error('order Error ')
 
     def receive_simpledeal(self,
                            code: str,
@@ -736,7 +745,7 @@ class QAStrategyCTABase():
 
                     order = self.acc.send_order(
                         code=code, towards=towards, price=price, amount=volume, order_id=order_id)
-                    print(order)
+                    QA_util_log_info(order)
                     order['topic'] = 'send_order'
                     self.pub.pub(
                         json.dumps(order), routing_key=self.strategy_id)

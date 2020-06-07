@@ -23,17 +23,18 @@ from QAPUBSUB.consumer import subscriber_topic,  subscriber_routing
 from QAPUBSUB.producer import publisher_routing
 from QAStrategy.qactabase import QAStrategyCTABase
 from QIFIAccount import QIFI_Account
+from QUANTAXIS.QAUtil.QALogs import QA_util_log_warning, QA_util_log_info, QA_util_log_debug, QA_util_log_error
 
 
 class QAStrategyStockBase(QAStrategyCTABase):
 
     def __init__(self, code=['000001'], frequence='1min', strategy_id='QA_STRATEGY', risk_check_gap=1, portfolio='default',
-                 start='2019-01-01', end='2019-10-21', send_wx=False, market_type='stock_cn',
+                 start='2019-01-01', end='2019-10-21', init_cash=1000000, send_wx=False, commission_coeff=0.00025, market_type='stock_cn',  
                  data_host=eventmq_ip, data_port=eventmq_port, data_user=eventmq_username, data_password=eventmq_password,
                  trade_host=eventmq_ip, trade_port=eventmq_port, trade_user=eventmq_username, trade_password=eventmq_password,
                  taskid=None, mongo_ip=mongo_ip):
         super().__init__(code=code, frequence=frequence, strategy_id=strategy_id, risk_check_gap=risk_check_gap, portfolio=portfolio,
-                         start=start, end=end, send_wx=send_wx,
+                         start=start, end=end, init_cash=init_cash, send_wx=send_wx, commission_coeff=commission_coeff, market_type=market_type,
                          data_host=eventmq_ip, data_port=eventmq_port, data_user=eventmq_username, data_password=eventmq_password,
                          trade_host=eventmq_ip, trade_port=eventmq_port, trade_user=eventmq_username, trade_password=eventmq_password,
                          taskid=taskid, mongo_ip=mongo_ip)
@@ -99,7 +100,7 @@ class QAStrategyStockBase(QAStrategyCTABase):
         self.running_time = self.new_data['datetime']
         if self.dt != str(self.new_data['datetime'])[0:16]:
             # [0:16]是分钟线位数
-            print('update!!!!!!!!!!!!')
+            QA_util_log_debug('update!!!!!!!!!!!!')
             self.dt = str(self.new_data['datetime'])[0:16]
             self.isupdate = True
 
@@ -149,19 +150,20 @@ class QAStrategyStockBase(QAStrategyCTABase):
     def debug(self):
         self.running_mode = 'backtest'
         self.database = pymongo.MongoClient(mongo_ip).QUANTAXIS
-        user = QA_User(username="admin", password='admin')
+        user = QA_User(username="quantaxis", password='quantaxis')
         port = user.new_portfolio(self.portfolio)
         self.acc = port.new_accountpro(
-            account_cookie=self.strategy_id, init_cash=self.init_cash, market_type=self.market_type, frequence= self.frequence)
+            account_cookie=self.strategy_id, init_cash=self.init_cash, commission_coeff=self.commission_coeff, allow_t0=False, allow_margin=False, allow_sellopen=False, market_type=self.market_type,
+            running_environment=self.market_type, frequence= self.frequence)
         #self.positions = self.acc.get_position(self.code)
 
-        print(self.acc)
+        QA_util_log_info(self.acc)
 
-        print(self.acc.market_type)
+        QA_util_log_info(self.acc.market_type)
         data = QA.QA_quotation(self.code, self.start, self.end, source=QA.DATASOURCE.MONGO,
                                frequence=self.frequence, market=self.market_type, output=QA.OUTPUT_FORMAT.DATASTRUCT)
 
-        data.data.apply(self.x1, axis=1)
+        data.data.progress_apply(self.x1, axis=1)
 
     def update_account(self):
         if self.running_mode == 'sim':
