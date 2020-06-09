@@ -24,6 +24,7 @@ from QAPUBSUB.producer import publisher_routing
 from QAStrategy.qastockbase import QAStrategyStockBase
 from QIFIAccount import QIFI_Account
 from QUANTAXIS.QAUtil.QALogs import QA_util_log_warning, QA_util_log_info, QA_util_log_debug, QA_util_log_error
+from QUANTAXIS.QAUtil import DATABASE
 
 
 class QAStrategyBondBase(QAStrategyStockBase):
@@ -32,7 +33,7 @@ class QAStrategyBondBase(QAStrategyStockBase):
                  start='2019-01-01', end='2019-10-21', init_cash=1000000, send_wx=False, market_type='bond_cn', commission_coeff=0.001,
                  data_host=eventmq_ip, data_port=eventmq_port, data_user=eventmq_username, data_password=eventmq_password,
                  trade_host=eventmq_ip, trade_port=eventmq_port, trade_user=eventmq_username, trade_password=eventmq_password,
-                 taskid=None, mongo_ip=mongo_ip):
+                 taskid=None, mongo_ip=mongo_ip, reset_acc=True):
         super().__init__(code=code, frequence=frequence, strategy_id=strategy_id, risk_check_gap=risk_check_gap, portfolio=portfolio,
                          start=start, end=end, init_cash=init_cash, send_wx=send_wx, commission_coeff=commission_coeff, market_type=market_type,
                          data_host=eventmq_ip, data_port=eventmq_port, data_user=eventmq_username, data_password=eventmq_password,
@@ -41,6 +42,7 @@ class QAStrategyBondBase(QAStrategyStockBase):
 
         self.code = code
         self.send_wx = send_wx
+        self.reset_acc = reset_acc
 
     def subscribe_data(self, code, frequence, data_host, data_port, data_user, data_password):
         """[summary]
@@ -149,8 +151,13 @@ class QAStrategyBondBase(QAStrategyStockBase):
 
     def debug(self):
         self.running_mode = 'backtest'
-        self.database = pymongo.MongoClient(mongo_ip).QUANTAXIS
+        self.database = DATABASE#pymongo.MongoClient(mongo_ip).QUANTAXIS
         user = QA_User(username="quantaxis", password='quantaxis')
+        if self.reset_acc:
+            self.database.account.remove(
+                {'account_cookie': self.strategy_id,
+                 'portfolio_cookie': self.portfolio,
+                 'user_cookie': user.user_cookie})
         port = user.new_portfolio(self.portfolio)
         self.acc = port.new_accountpro(
             account_cookie=self.strategy_id, init_cash=self.init_cash, commission_coeff=self.commission_coeff, allow_t0=True, allow_margin=False, allow_sellopen=False, market_type=self.market_type,
@@ -158,13 +165,15 @@ class QAStrategyBondBase(QAStrategyStockBase):
         #self.positions = self.acc.get_position(self.code)
 
         QA_util_log_info(self.acc)
-
-        QA_util_log_info(self.acc.market_type)
         data = QA.QA_quotation(self.code, self.start, self.end, source=QA.DATASOURCE.MONGO,
                                frequence=self.frequence, market=self.market_type, output=QA.OUTPUT_FORMAT.DATASTRUCT)
-
+        
+        self.on_before_bar(data)
         data.data.progress_apply(self.x1, axis=1)
 
+    def on_before_bar(self, data):
+        return data
+    
     def update_account(self):
         if self.running_mode == 'sim':
             QA.QA_util_log_info('{} UPDATE ACCOUNT'.format(
